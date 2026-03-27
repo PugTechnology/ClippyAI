@@ -58,7 +58,20 @@ async def verify_signature(request: Request):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
 # Utility: GitHub API Client
-def github_request(method, endpoint, data=None):
+from typing import Any
+
+def github_request(method: str, endpoint: str, data: dict[str, Any] | None = None) -> httpx.Response:
+    """
+    Make a request to the GitHub API.
+
+    Args:
+        method: The HTTP method (GET, POST, PATCH, etc.).
+        endpoint: The API endpoint (e.g., '/pulls/1').
+        data: Optional JSON payload for the request.
+
+    Returns:
+        The HTTP response from the GitHub API.
+    """
     headers = {
         "Authorization": f"Bearer {GITHUB_PAT}",
         "Accept": "application/vnd.github.v3+json",
@@ -66,18 +79,21 @@ def github_request(method, endpoint, data=None):
     }
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}{endpoint}"
     
-    with httpx.Client() as client:
-        if method == "GET":
-            # If fetching a diff, change the accept header
-            if endpoint.endswith(".diff"):
-                headers["Accept"] = "application/vnd.github.v3.diff"
-            return client.get(url, headers=headers)
-        elif method == "POST":
-            return client.post(url, headers=headers, json=data)
-        elif method == "PATCH":
-            return client.patch(url, headers=headers, json=data)
+    # If fetching a diff, change the accept header
+    if method == "GET" and endpoint.endswith(".diff"):
+        headers["Accept"] = "application/vnd.github.v3.diff"
 
-def get_repo_map():
+    # Use a safe timeout to prevent indefinite hangs
+    with httpx.Client(timeout=10.0) as client:
+        return client.request(method, url, headers=headers, json=data)
+
+def get_repo_map() -> str:
+    """
+    Fetch a list of all files in the repository's main branch.
+
+    Returns:
+        A newline-separated string of file paths.
+    """
     response = github_request("GET", "/git/trees/main?recursive=1")
     if response.status_code != 200:
         return "Could not fetch repository map."
@@ -86,12 +102,17 @@ def get_repo_map():
     paths = [item["path"] for item in tree]
     return "\n".join(paths)
 
-def get_journal_summary():
+def get_journal_summary() -> str:
+    """
+    Fetch the recent contents of the JOURNAL.md file.
+
+    Returns:
+        The last 2000 characters of the journal.
+    """
     response = github_request("GET", "/contents/JOURNAL.md")
     if response.status_code != 200:
         return "No recent history found."
     data = response.json()
-    import base64
     content = base64.b64decode(data.get("content", "")).decode("utf-8")
     # Take the last 2000 characters to avoid huge context
     return content[-2000:]
