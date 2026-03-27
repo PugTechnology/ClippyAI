@@ -4,10 +4,18 @@ import tempfile
 from unittest.mock import MagicMock, patch
 import sys
 
+# Custom Mock HTTP Exception
+class MockHTTPException(Exception):
+    def __init__(self, status_code, detail=None):
+        self.status_code = status_code
+        self.detail = detail
+
 # Mock modules before importing app
 sys.modules['google'] = MagicMock()
 sys.modules['google.genai'] = MagicMock()
-sys.modules['fastapi'] = MagicMock()
+fastapi_mock = MagicMock()
+fastapi_mock.HTTPException = MockHTTPException
+sys.modules['fastapi'] = fastapi_mock
 sys.modules['httpx'] = MagicMock()
 
 import app

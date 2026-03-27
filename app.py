@@ -5,10 +5,13 @@ import hashlib
 import sqlite3
 import httpx
 import json
+import base64
+import asyncio
 from google import genai
 from google.genai import types
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from contextlib import asynccontextmanager
+from typing import Any
 
 # Configuration
 GITHUB_PAT = os.getenv("GITHUB_PAT")
@@ -16,14 +19,26 @@ GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 REPO_OWNER = os.getenv("REPO_OWNER", "your-github-username")
 REPO_NAME = os.getenv("REPO_NAME", "your-repo-name")
-MAX_RETRIES = 3
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 
 # Initialize Gemini
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 # Using GEMINI_MODEL as the standard fast/capable model
 
+# Module-level HTTP client
+http_client = httpx.Client(timeout=10.0)
 
+def load_file_content(filepath: str, default: str = "") -> str:
+    try:
+        with open(filepath, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return default
+
+PROJECT_RULES = load_file_content("README.md", "Standard Python conventions apply.")
+REVIEWER_PROMPT_TEMPLATE = load_file_content("prompt_reviewer.txt")
+ANALYST_PROMPT_TEMPLATE = load_file_content("analyst_prompt.txt")
 
 # Database Connection Helper
 def get_db_connection(db_path: str = 'data/watchdog.db') -> sqlite3.Connection:
@@ -43,11 +58,15 @@ def init_db(db_path: str = 'data/watchdog.db'):
     conn.commit()
     conn.close()
 
+def setup_data_dir():
+    os.makedirs('data', exist_ok=True)
+    init_db()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await asyncio.to_thread(os.makedirs, 'data', exist_ok=True)
-    await asyncio.to_thread(init_db)
+    await asyncio.to_thread(setup_data_dir)
     yield
+    http_client.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -72,17 +91,6 @@ from typing import Any
 github_client = httpx.Client(timeout=10.0)
 
 def github_request(method: str, endpoint: str, data: dict[str, Any] | None = None) -> httpx.Response:
-    """
-    Make a request to the GitHub API.
-
-    Args:
-        method: The HTTP method (GET, POST, PATCH, etc.).
-        endpoint: The API endpoint (e.g., '/pulls/1').
-        data: Optional JSON payload for the request.
-
-    Returns:
-        The HTTP response from the GitHub API.
-    """
     headers = {
         "Authorization": f"Bearer {GITHUB_PAT}",
         "Accept": "application/vnd.github.v3+json",
@@ -90,7 +98,6 @@ def github_request(method: str, endpoint: str, data: dict[str, Any] | None = Non
     }
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}{endpoint}"
     
-    # If fetching a diff, change the accept header
     if method == "GET" and endpoint.endswith(".diff"):
         headers["Accept"] = "application/vnd.github.v3.diff"
 
@@ -98,12 +105,6 @@ def github_request(method: str, endpoint: str, data: dict[str, Any] | None = Non
     return github_client.request(method, url, headers=headers, json=data)
 
 def get_repo_map() -> str:
-    """
-    Fetch a list of all files in the repository's main branch.
-
-    Returns:
-        A newline-separated string of file paths.
-    """
     response = github_request("GET", "/git/trees/main?recursive=1")
     if response.status_code != 200:
         return "Could not fetch repository map."
@@ -113,49 +114,36 @@ def get_repo_map() -> str:
     return "\n".join(paths)
 
 def get_journal_summary() -> str:
-    """
-    Fetch the recent contents of the JOURNAL.md file.
-
-    Returns:
-        The last 2000 characters of the journal.
-    """
     response = github_request("GET", "/contents/JOURNAL.md")
     if response.status_code != 200:
         return "No recent history found."
     data = response.json()
     content = base64.b64decode(data.get("content", "")).decode("utf-8")
-    # Take the last 2000 characters to avoid huge context
     return content[-2000:]
 
 # Core Logic: Analyst Planning
 def process_analyst_request(issue_number: int, issue_title: str, issue_body: str, comment: str = ""):
+    if not client:
+        print("GEMINI_API_KEY is missing. Cannot process request.")
+        return
+
     repo_map = get_repo_map()
     journal_summary = get_journal_summary()
 
-    try:
-        with open("README.md", "r") as f:
-            rules = f.read()
-    except FileNotFoundError:
-        rules = "Standard Python conventions apply."
-
-    try:
-        with open("analyst_prompt.txt", "r") as f:
-            analyst_prompt_template = f.read()
-    except FileNotFoundError:
+    if not ANALYST_PROMPT_TEMPLATE:
         print("analyst_prompt.txt not found")
         return
 
-    full_prompt = analyst_prompt_template.format(
+    full_prompt = ANALYST_PROMPT_TEMPLATE.format(
         issue_number=issue_number,
         issue_title=issue_title,
         issue_body=issue_body,
         comment=comment,
         repository_map=repo_map,
         journal_summary=journal_summary,
-        rules=rules
+        rules=PROJECT_RULES
     )
 
-    # Force JSON output from Gemini
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=full_prompt,
@@ -169,7 +157,6 @@ def process_analyst_request(issue_number: int, issue_title: str, issue_body: str
         return
 
     if plan_data.get("should_proceed"):
-        # Format the plan into a comment
         plan_steps = "\n".join([f"1. {step}" for step in plan_data.get("plan", [])])
         files_to_change = "\n".join([f"- {f}" for f in plan_data.get("files_to_change", [])])
         risks = "\n".join([f"- {r}" for r in plan_data.get("risks", [])])
@@ -184,20 +171,18 @@ def process_analyst_request(issue_number: int, issue_title: str, issue_body: str
             f"#### Potential Risks:\n{risks}\n\n"
             f"@google-jules, please begin execution."
         )
-
-        # Post the comment
         github_request("POST", f"/issues/{issue_number}/comments", {"body": comment_body})
-
-        # Assign to coder
         github_request("POST", f"/issues/{issue_number}/assignees", {"assignees": ["google-jules"]})
     else:
-        # If should_proceed is false, add a comment explaining why (if they provided an analysis)
         reason = plan_data.get("analysis", "Analyst determined it should not proceed with this request.")
         github_request("POST", f"/issues/{issue_number}/comments", {"body": f"### 🧠 Analyst Note\n\n{reason}"})
 
 # Core Logic: Reviewing a PR
 def process_pr_review(pr_number: int):
-    # 1. Check Circuit Breaker
+    if not client:
+        print("GEMINI_API_KEY is missing. Cannot process review.")
+        return
+
     conn = get_db_connection()
     c = conn.cursor()
     c.execute('SELECT attempts FROM pr_tracking WHERE pr_number = ?', (pr_number,))
@@ -205,7 +190,6 @@ def process_pr_review(pr_number: int):
     
     attempts = row[0] if row else 0
     if attempts >= MAX_RETRIES:
-        # Max attempts reached, close PR and alert
         github_request("PATCH", f"/pulls/{pr_number}", {"state": "closed"})
         github_request("POST", f"/issues/{pr_number}/comments", {
             "body": "🛑 **Max iteration attempts reached (3/3).** This PR has been closed and flagged for human review to prevent an infinite loop."
@@ -215,26 +199,14 @@ def process_pr_review(pr_number: int):
         conn.close()
         return
 
-    # 2. Fetch the Diff
     diff_response = github_request("GET", f"/pulls/{pr_number}.diff")
     if diff_response.status_code != 200:
+        conn.close()
         return
     diff_text = diff_response.text
 
-    # 3. Trigger Reviewer Agent
-    with open("prompt_reviewer.txt", "r") as f:
-        reviewer_prompt_template = f.read()
+    full_prompt = REVIEWER_PROMPT_TEMPLATE.format(diff=diff_text, rules=PROJECT_RULES)
     
-    # Load project rules from README.md
-    try:
-        with open("README.md", "r") as f:
-            rules = f.read()
-    except FileNotFoundError:
-        rules = "Standard Python conventions apply."
-
-    full_prompt = reviewer_prompt_template.format(diff=diff_text, rules=rules)
-    
-    # Force JSON output from Gemini
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=full_prompt,
@@ -243,14 +215,10 @@ def process_pr_review(pr_number: int):
     
     review_data = json.loads(response.text)
     
-    # 4. Handle Verdict
     if review_data.get("verdict") == "APPROVE":
-        # Merge the PR
         github_request("PATCH", f"/pulls/{pr_number}/merge", {"commit_title": f"Auto-merge PR #{pr_number}"})
         c.execute("UPDATE pr_tracking SET status = 'MERGED' WHERE pr_number = ?", (pr_number,))
-    
     else:
-        # Format JSON into Markdown for Jules
         issues_md = "\n".join([f"- ❌ {issue}" for issue in review_data.get("issues", [])])
         suggestions_md = "\n".join([f"- 💡 {sug}" for sug in review_data.get("suggestions", [])])
         
@@ -262,11 +230,7 @@ def process_pr_review(pr_number: int):
             f"#### Suggestions:\n{suggestions_md}\n\n"
             f"@google-jules, please apply these fixes and push a new commit."
         )
-        
-        # Post the comment
         github_request("POST", f"/issues/{pr_number}/comments", {"body": comment_body})
-        
-        # Increment attempt counter
         c.execute('INSERT OR REPLACE INTO pr_tracking (pr_number, attempts, status) VALUES (?, ?, ?)', 
                   (pr_number, attempts + 1, 'WAITING_ON_JULES'))
     
@@ -281,22 +245,18 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     event = request.headers.get("X-GitHub-Event")
     payload = await request.json()
 
-    # Route Pull Request Events
     if event == "pull_request":
         action = payload.get("action")
         pr_number = payload["pull_request"]["number"]
         sender = payload["sender"]["login"]
         
-        # Only trigger review loop if the PR was opened or updated by Jules
         if action in ["opened", "synchronize"] and sender == "google-jules":
             background_tasks.add_task(process_pr_review, pr_number)
 
-    # Route Issue Comment Events (Trigger Analyst)
     elif event == "issue_comment":
         action = payload.get("action")
         if action == "created":
             comment_body = payload["comment"]["body"]
-            # Check if someone is invoking the hivemind
             if "@hivemind" in comment_body.lower():
                 issue_number = payload["issue"]["number"]
                 issue_title = payload["issue"]["title"]
@@ -307,7 +267,6 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/trigger-analyst/{issue_number}")
 async def trigger_analyst(issue_number: int, background_tasks: BackgroundTasks):
-    # Fetch issue details to start analysis
     response = github_request("GET", f"/issues/{issue_number}")
     if response.status_code != 200:
         raise HTTPException(status_code=404, detail="Issue not found")
