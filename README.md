@@ -37,6 +37,7 @@ The Watchdog is designed to run continuously. It requires an exposed endpoint to
 GITHUB_WEBHOOK_SECRET=your_secret_here
 GITHUB_PAT=your_machine_user_token
 GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL=gemini-3.1-flash-lite-preview
 PORT=5000
 ```
 
@@ -57,6 +58,7 @@ PORT=5000
     *   `GITHUB_WEBHOOK_SECRET`: A secret string used to secure your webhook endpoint.
     *   `GITHUB_PAT`: A Personal Access Token for the machine user (e.g., google-jules) with repository access.
     *   `GEMINI_API_KEY`: Your Google Gemini API Key.
+    *   `GEMINI_MODEL`: The model used by the agents (e.g. gemini-3.1-flash-lite-preview).
     *   `REPO_OWNER`: Your GitHub username or organization name.
     *   `REPO_NAME`: The name of the repository.
 
