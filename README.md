@@ -38,3 +38,45 @@ GITHUB_WEBHOOK_SECRET=your_secret_here
 GITHUB_PAT=your_machine_user_token
 GEMINI_API_KEY=your_gemini_key
 PORT=5000
+```
+
+### Local Setup & Testing
+
+1.  **Clone the Repository**
+    ```bash
+    git clone <your-repo-url>
+    cd <your-repo-name>
+    ```
+
+2.  **Environment Variables**
+    Create a `.env` file based on the provided template:
+    ```bash
+    cp .env.example .env
+    ```
+    Then, fill in the values in your `.env` file:
+    *   `GITHUB_WEBHOOK_SECRET`: A secret string used to secure your webhook endpoint.
+    *   `GITHUB_PAT`: A Personal Access Token for the machine user (e.g., google-jules) with repository access.
+    *   `GEMINI_API_KEY`: Your Google Gemini API Key.
+    *   `REPO_OWNER`: Your GitHub username or organization name.
+    *   `REPO_NAME`: The name of the repository.
+
+3.  **Run with Docker Compose**
+    Start the Watchdog server:
+    ```bash
+    docker-compose up -d --build
+    ```
+    The server will be running on `http://localhost:5000`.
+
+4.  **Configure GitHub Webhooks**
+    *   Go to your GitHub repository -> Settings -> Webhooks -> Add webhook.
+    *   **Payload URL:** `http://<your-public-ip-or-domain>:5000/webhook` (You might need a tool like ngrok for local testing).
+    *   **Content type:** `application/json`
+    *   **Secret:** The `GITHUB_WEBHOOK_SECRET` from your `.env` file.
+    *   **Events:** Select "Issue comments" and "Pull requests".
+    *   Make sure the webhook is active.
+
+### Triggering the Analyst
+
+You can trigger the Analyst Agent to create an execution plan for an issue in two ways:
+1.  **Via GitHub Comment:** Comment `@hivemind` on any open issue.
+2.  **Via API:** Send a POST request to `/trigger-analyst/{issue_number}`.

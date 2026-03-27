@@ -8,6 +8,8 @@ services:
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
       - GITHUB_PAT=${GITHUB_PAT}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - REPO_OWNER=${REPO_OWNER}
+      - REPO_NAME=${REPO_NAME}
     volumes:
       - ./data:/app/data # Persists the SQLite database
     restart: unless-stopped
