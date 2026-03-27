@@ -1,4 +1,5 @@
 import os
+import asyncio
 import hmac
 import hashlib
 import sqlite3
@@ -39,8 +40,8 @@ def init_db():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    os.makedirs('data', exist_ok=True)
-    init_db()
+    await asyncio.to_thread(os.makedirs, 'data', exist_ok=True)
+    await asyncio.to_thread(init_db)
     yield
 
 app = FastAPI(lifespan=lifespan)
