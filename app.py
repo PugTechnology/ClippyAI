@@ -62,6 +62,9 @@ async def verify_signature(request: Request):
 # Utility: GitHub API Client
 from typing import Any
 
+# Reuse connection pool for better performance
+github_client = httpx.Client(timeout=10.0)
+
 def github_request(method: str, endpoint: str, data: dict[str, Any] | None = None) -> httpx.Response:
     """
     Make a request to the GitHub API.
@@ -85,9 +88,8 @@ def github_request(method: str, endpoint: str, data: dict[str, Any] | None = Non
     if method == "GET" and endpoint.endswith(".diff"):
         headers["Accept"] = "application/vnd.github.v3.diff"
 
-    # Use a safe timeout to prevent indefinite hangs
-    with httpx.Client(timeout=10.0) as client:
-        return client.request(method, url, headers=headers, json=data)
+    # Reuse global client for connection pooling
+    return github_client.request(method, url, headers=headers, json=data)
 
 def get_repo_map() -> str:
     """
