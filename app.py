@@ -267,7 +267,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/trigger-analyst/{issue_number}")
 async def trigger_analyst(issue_number: int, background_tasks: BackgroundTasks):
-    response = github_request("GET", f"/issues/{issue_number}")
+    response = await asyncio.to_thread(github_request, "GET", f"/issues/{issue_number}")
     if response.status_code != 200:
         raise HTTPException(status_code=404, detail="Issue not found")
 
