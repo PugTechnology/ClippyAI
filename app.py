@@ -4,7 +4,8 @@ import hashlib
 import sqlite3
 import httpx
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from contextlib import asynccontextmanager
 
@@ -15,11 +16,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 REPO_OWNER = os.getenv("REPO_OWNER", "your-github-username")
 REPO_NAME = os.getenv("REPO_NAME", "your-repo-name")
 MAX_RETRIES = 3
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 
 # Initialize Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-# Using gemini-2.5-flash as the standard fast/capable model
-model = genai.GenerativeModel('gemini-2.5-flash')
+client = genai.Client(api_key=GEMINI_API_KEY)
+# Using GEMINI_MODEL as the standard fast/capable model
+
 
 # Database Initialization
 def init_db():
@@ -146,9 +148,10 @@ def process_analyst_request(issue_number: int, issue_title: str, issue_body: str
     )
 
     # Force JSON output from Gemini
-    response = model.generate_content(
-        full_prompt,
-        generation_config=genai.GenerationConfig(response_mime_type="application/json")
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=full_prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json")
     )
 
     try:
@@ -224,9 +227,10 @@ def process_pr_review(pr_number: int):
     full_prompt = reviewer_prompt_template.format(diff=diff_text, rules=rules)
     
     # Force JSON output from Gemini
-    response = model.generate_content(
-        full_prompt,
-        generation_config=genai.GenerationConfig(response_mime_type="application/json")
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=full_prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json")
     )
     
     review_data = json.loads(response.text)
