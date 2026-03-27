@@ -11,5 +11,7 @@ services:
       - REPO_OWNER=${REPO_OWNER}
       - REPO_NAME=${REPO_NAME}
     volumes:
+      - .:/app # Mounts the current directory into the container
       - ./data:/app/data # Persists the SQLite database
+    command: "uvicorn app:app --host 0.0.0.0 --port 5000 --reload"
     restart: unless-stopped
