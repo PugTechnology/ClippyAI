@@ -1,4 +1,5 @@
 import os
+import asyncio
 import hmac
 import hashlib
 import sqlite3
@@ -72,7 +73,7 @@ app = FastAPI(lifespan=lifespan)
 # Utility: Verify GitHub Webhook Signature
 async def verify_signature(request: Request):
     if not GITHUB_WEBHOOK_SECRET:
-        return
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
     signature = request.headers.get("X-Hub-Signature-256")
     if not signature:
         raise HTTPException(status_code=401, detail="Missing signature")
@@ -84,6 +85,11 @@ async def verify_signature(request: Request):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
 # Utility: GitHub API Client
+from typing import Any
+
+# Reuse connection pool for better performance
+github_client = httpx.Client(timeout=10.0)
+
 def github_request(method: str, endpoint: str, data: dict[str, Any] | None = None) -> httpx.Response:
     headers = {
         "Authorization": f"Bearer {GITHUB_PAT}",
@@ -95,7 +101,8 @@ def github_request(method: str, endpoint: str, data: dict[str, Any] | None = Non
     if method == "GET" and endpoint.endswith(".diff"):
         headers["Accept"] = "application/vnd.github.v3.diff"
 
-    return http_client.request(method, url, headers=headers, json=data)
+    # Reuse global client for connection pooling
+    return github_client.request(method, url, headers=headers, json=data)
 
 def get_repo_map() -> str:
     response = github_request("GET", "/git/trees/main?recursive=1")
