@@ -210,6 +210,7 @@ def process_pr_review(pr_number: int):
     # 2. Fetch the Diff
     diff_response = github_request("GET", f"/pulls/{pr_number}.diff")
     if diff_response.status_code != 200:
+        conn.close()
         return
     diff_text = diff_response.text
 
