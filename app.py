@@ -48,7 +48,7 @@ app = FastAPI(lifespan=lifespan)
 # Utility: Verify GitHub Webhook Signature
 async def verify_signature(request: Request):
     if not GITHUB_WEBHOOK_SECRET:
-        return
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
     signature = request.headers.get("X-Hub-Signature-256")
     if not signature:
         raise HTTPException(status_code=401, detail="Missing signature")
