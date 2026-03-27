@@ -23,9 +23,14 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # Using GEMINI_MODEL as the standard fast/capable model
 
 
+
+# Database Connection Helper
+def get_db_connection(db_path: str = 'data/watchdog.db') -> sqlite3.Connection:
+    return sqlite3.connect(db_path)
+
 # Database Initialization
-def init_db():
-    conn = sqlite3.connect('data/watchdog.db')
+def init_db(db_path: str = 'data/watchdog.db'):
+    conn = get_db_connection(db_path)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS pr_tracking (
@@ -190,7 +195,7 @@ def process_analyst_request(issue_number: int, issue_title: str, issue_body: str
 # Core Logic: Reviewing a PR
 def process_pr_review(pr_number: int):
     # 1. Check Circuit Breaker
-    conn = sqlite3.connect('data/watchdog.db')
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute('SELECT attempts FROM pr_tracking WHERE pr_number = ?', (pr_number,))
     row = c.fetchone()
