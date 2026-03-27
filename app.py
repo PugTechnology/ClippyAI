@@ -6,7 +6,6 @@ import sqlite3
 import httpx
 import json
 import base64
-import asyncio
 from google import genai
 from google.genai import types
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
@@ -28,7 +27,6 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 # Using GEMINI_MODEL as the standard fast/capable model
 
 # Module-level HTTP client
-http_client = httpx.Client(timeout=10.0)
 
 def load_file_content(filepath: str, default: str = "") -> str:
     try:
@@ -89,7 +87,7 @@ def setup_data_dir():
 async def lifespan(app: FastAPI):
     await asyncio.to_thread(setup_data_dir)
     yield
-    http_client.close()
+    github_client.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -167,14 +165,18 @@ def process_analyst_request(issue_number: int, issue_title: str, issue_body: str
         rules=PROJECT_RULES
     )
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=full_prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=AnalystResponse
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=AnalystResponse
+            )
         )
-    )
+    except Exception as e:
+        print(f"Gemini API error: {e}")
+        return
 
     try:
         plan_data: AnalystResponse = response.parsed
@@ -233,14 +235,19 @@ def process_pr_review(pr_number: int):
 
     full_prompt = REVIEWER_PROMPT_TEMPLATE.format(diff=diff_text, rules=PROJECT_RULES)
     
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=full_prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ReviewerResponse
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ReviewerResponse
+            )
         )
-    )
+    except Exception as e:
+        print(f"Gemini API error: {e}")
+        conn.close()
+        return
     
     try:
         review_data: ReviewerResponse = response.parsed
@@ -301,7 +308,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/trigger-analyst/{issue_number}")
 async def trigger_analyst(issue_number: int, background_tasks: BackgroundTasks):
-    response = github_request("GET", f"/issues/{issue_number}")
+    response = await asyncio.to_thread(github_request, "GET", f"/issues/{issue_number}")
     if response.status_code != 200:
         raise HTTPException(status_code=404, detail="Issue not found")
 
