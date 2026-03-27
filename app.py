@@ -6,7 +6,6 @@ import sqlite3
 import httpx
 import json
 import base64
-import asyncio
 from google import genai
 from google.genai import types
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
