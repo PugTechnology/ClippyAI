@@ -11,7 +11,8 @@ from google import genai
 from google.genai import types
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, List
+from pydantic import BaseModel
 
 # Configuration
 GITHUB_PAT = os.getenv("GITHUB_PAT")
@@ -39,6 +40,28 @@ def load_file_content(filepath: str, default: str = "") -> str:
 PROJECT_RULES = load_file_content("README.md", "Standard Python conventions apply.")
 REVIEWER_PROMPT_TEMPLATE = load_file_content("prompt_reviewer.txt")
 ANALYST_PROMPT_TEMPLATE = load_file_content("analyst_prompt.txt")
+
+# Pydantic Models for Structured LLM Output
+class AnalystResponse(BaseModel):
+    should_proceed: bool
+    issue_type: str
+    analysis: str
+    files_to_change: List[str]
+    plan: List[str]
+    coder_instructions: str
+    risks: List[str]
+    estimated_complexity: str
+
+class ReviewerResponse(BaseModel):
+    approved: bool
+    score: int
+    positives: List[str]
+    issues: List[str]
+    suggestions: List[str]
+    project_compliance: bool
+    security_ok: bool
+    verdict: str
+    labels: List[str]
 
 # Database Connection Helper
 def get_db_connection(db_path: str = 'data/watchdog.db') -> sqlite3.Connection:
@@ -147,34 +170,37 @@ def process_analyst_request(issue_number: int, issue_title: str, issue_body: str
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=full_prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json")
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=AnalystResponse
+        )
     )
 
     try:
-        plan_data = json.loads(response.text)
+        plan_data: AnalystResponse = response.parsed
     except Exception as e:
         print(f"Failed to parse Gemini response: {e}")
         return
 
-    if plan_data.get("should_proceed"):
-        plan_steps = "\n".join([f"1. {step}" for step in plan_data.get("plan", [])])
-        files_to_change = "\n".join([f"- {f}" for f in plan_data.get("files_to_change", [])])
-        risks = "\n".join([f"- {r}" for r in plan_data.get("risks", [])])
+    if plan_data.should_proceed:
+        plan_steps = "\n".join([f"1. {step}" for step in plan_data.plan])
+        files_to_change = "\n".join([f"- {f}" for f in plan_data.files_to_change])
+        risks = "\n".join([f"- {r}" for r in plan_data.risks])
 
         comment_body = (
             f"### 🧠 Analyst Plan Generated\n\n"
-            f"**Analysis:** {plan_data.get('analysis')}\n"
-            f"**Estimated Complexity:** {plan_data.get('estimated_complexity')}\n\n"
+            f"**Analysis:** {plan_data.analysis}\n"
+            f"**Estimated Complexity:** {plan_data.estimated_complexity}\n\n"
             f"#### Files to Modify:\n{files_to_change}\n\n"
             f"#### Execution Plan:\n{plan_steps}\n\n"
-            f"#### Instructions for Coder:\n{plan_data.get('coder_instructions')}\n\n"
+            f"#### Instructions for Coder:\n{plan_data.coder_instructions}\n\n"
             f"#### Potential Risks:\n{risks}\n\n"
             f"@google-jules, please begin execution."
         )
         github_request("POST", f"/issues/{issue_number}/comments", {"body": comment_body})
         github_request("POST", f"/issues/{issue_number}/assignees", {"assignees": ["google-jules"]})
     else:
-        reason = plan_data.get("analysis", "Analyst determined it should not proceed with this request.")
+        reason = plan_data.analysis or "Analyst determined it should not proceed with this request."
         github_request("POST", f"/issues/{issue_number}/comments", {"body": f"### 🧠 Analyst Note\n\n{reason}"})
 
 # Core Logic: Reviewing a PR
@@ -210,22 +236,30 @@ def process_pr_review(pr_number: int):
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=full_prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json")
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=ReviewerResponse
+        )
     )
     
-    review_data = json.loads(response.text)
+    try:
+        review_data: ReviewerResponse = response.parsed
+    except Exception as e:
+        print(f"Failed to parse Gemini response: {e}")
+        conn.close()
+        return
     
-    if review_data.get("verdict") == "APPROVE":
+    if review_data.verdict == "APPROVE":
         github_request("PATCH", f"/pulls/{pr_number}/merge", {"commit_title": f"Auto-merge PR #{pr_number}"})
         c.execute("UPDATE pr_tracking SET status = 'MERGED' WHERE pr_number = ?", (pr_number,))
     else:
-        issues_md = "\n".join([f"- ❌ {issue}" for issue in review_data.get("issues", [])])
-        suggestions_md = "\n".join([f"- 💡 {sug}" for sug in review_data.get("suggestions", [])])
+        issues_md = "\n".join([f"- ❌ {issue}" for issue in review_data.issues])
+        suggestions_md = "\n".join([f"- 💡 {sug}" for sug in review_data.suggestions])
         
         comment_body = (
             f"### 🤖 Watchdog Review (Attempt {attempts + 1}/{MAX_RETRIES})\n\n"
-            f"**Verdict:** {review_data.get('verdict')}\n"
-            f"**Score:** {review_data.get('score')}/10\n\n"
+            f"**Verdict:** {review_data.verdict}\n"
+            f"**Score:** {review_data.score}/10\n\n"
             f"#### Required Changes:\n{issues_md}\n\n"
             f"#### Suggestions:\n{suggestions_md}\n\n"
             f"@google-jules, please apply these fixes and push a new commit."
