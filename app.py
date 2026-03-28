@@ -22,8 +22,8 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 # Database Initialization
-def init_db():
-    conn = sqlite3.connect('data/watchdog.db')
+def init_db(db_path='data/watchdog.db'):
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS pr_tracking (
