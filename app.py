@@ -21,6 +21,19 @@ genai.configure(api_key=GEMINI_API_KEY)
 # Using gemini-2.5-flash as the standard fast/capable model
 model = genai.GenerativeModel('gemini-2.5-flash')
 
+# Load Static Prompts & Rules
+try:
+    with open("prompt_reviewer.txt", "r") as f:
+        REVIEWER_PROMPT_TEMPLATE = f.read()
+except FileNotFoundError:
+    REVIEWER_PROMPT_TEMPLATE = "Review this code: {diff} with rules: {rules}"
+
+try:
+    with open("README.md", "r") as f:
+        PROJECT_RULES = f.read()
+except FileNotFoundError:
+    PROJECT_RULES = "Standard Python conventions apply."
+
 # Database Initialization
 def init_db():
     conn = sqlite3.connect('data/watchdog.db')
@@ -104,17 +117,7 @@ def process_pr_review(pr_number: int):
     diff_text = diff_response.text
 
     # 3. Trigger Reviewer Agent
-    with open("prompt_reviewer.txt", "r") as f:
-        reviewer_prompt_template = f.read()
-    
-    # Load project rules from README.md
-    try:
-        with open("README.md", "r") as f:
-            rules = f.read()
-    except FileNotFoundError:
-        rules = "Standard Python conventions apply."
-
-    full_prompt = reviewer_prompt_template.format(diff=diff_text, rules=rules)
+    full_prompt = REVIEWER_PROMPT_TEMPLATE.format(diff=diff_text, rules=PROJECT_RULES)
     
     # Force JSON output from Gemini
     response = model.generate_content(
